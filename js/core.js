@@ -71,6 +71,11 @@ function render() {
     reports:            renderReports,
     users:              renderUsers,
   };
+  // Guard: operators can't access admin-only pages. Silently redirect to Overview.
+  const adminOnlyPages = ['templates', 'reports', 'users', 'schedule'];
+  if (S.role !== 'admin' && adminOnlyPages.includes(S.page)) {
+    S.page = 'overview';
+  }
   el.innerHTML = (map[S.page] || (() => '<div class="empty-state">Page not found.</div>'))();
   attachHandlers();
   applyAdminVisibility();
@@ -300,7 +305,7 @@ function renderCalendar(events, monthOffset) {
                 ${ev.title}
               </div>
             `).join('') : ''}
-            ${!c.outOfMonth && c.events && c.events.length > 3 ? `<div class="cal-more">+${c.events.length-3} more</div>` : ''}
+            ${!c.outOfMonth && c.events && c.events.length > 3 ? `<button class="cal-more" data-action="show-cal-day" data-date="${c.date}">+${c.events.length-3} more</button>` : ''}
           </div>
         `).join('')}
       </div>
@@ -398,7 +403,7 @@ function buildNotifications() {
     items.push({
       group:   'parts',
       title:   p.stock === 0 ? `${p.name} · out of stock` : `${p.name} · low stock (${p.stock} ${p.unit})`,
-      sub:     `Code ${p.code} · min ${p.minStock} ${p.unit} · used by ${partUsedBy(p.id).length} equipment`,
+      sub:     `Part no. ${p.code} · min ${p.minStock} ${p.unit} · used by ${partUsedBy(p.id).length} equipment`,
       severity:p.stock === 0 ? 'danger' : 'warn',
       navPage: 'parts',
     });
