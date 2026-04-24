@@ -53,6 +53,180 @@ function renderLogin() {
    ═══════════════════════════════════════════════════════════ */
 
 function renderOverview() {
+  // Role-based overview: operators see a task-first view, admins see the analytics dashboard.
+  if (S.role !== 'admin') return renderOperatorOverview();
+  return renderAdminOverview();
+}
+
+/* ═══════════════════════════════════════════════════════════
+   OPERATOR OVERVIEW — task-first, big visuals, 2 quick actions
+   ═══════════════════════════════════════════════════════════ */
+
+function renderOperatorOverview() {
+  const today      = new Date().toISOString().slice(0, 10);
+  const name       = S.user ? S.user.name.split(' ')[0] : 'there';
+  const hour       = new Date().getHours();
+  const greeting   = hour < 12 ? 'Good morning' : hour < 18 ? 'Good afternoon' : 'Good evening';
+  const dateLabel  = new Date().toLocaleDateString('en-MY', { weekday:'long', day:'numeric', month:'long' });
+
+  const activeBreakdowns = BREAKDOWNS.filter(b => b.status === 'active');
+  const overdueJobs  = JOBS.filter(j => effectiveStatus(j) === 'overdue');
+  const todayJobs    = JOBS.filter(j => j.dueDate === today && effectiveStatus(j) !== 'completed' && effectiveStatus(j) !== 'overdue');
+  const inprogJobs   = JOBS.filter(j => j.status === 'inprogress');
+  const weekJobs     = JOBS.filter(j => {
+    if (effectiveStatus(j) !== 'upcoming') return false;
+    if (!j.dueDate || j.dueDate === today) return false;
+    const diff = Math.round((new Date(j.dueDate) - new Date()) / 86400000);
+    return diff > 0 && diff <= 7;
+  });
+
+  const closedToday = HISTORY.filter(h => h.date === today).length;
+
+  const renderJobRow = (j) => {
+    const isFac = j.entityType === 'facility';
+    const eq = isFac ? FACILITIES.find(x => x.id === j.entityId) : EQUIPMENT.find(x => x.id === (j.entityId || j.equipId));
+    const photo = isFac
+      ? (eq && eq.photo)
+      : (eq && eq.photos && (eq.photos.front || eq.photos.rear || eq.photos.left || eq.photos.right));
+    const thumb = photo
+      ? `<img src="${photo}" alt="${j.equipName}">`
+      : (isFac
+          ? `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 21h18M5 21V7l8-4v18M19 21V11l-6-4"/></svg>`
+          : equipIcon(eq && eq.type));
+    const eStatus = effectiveStatus(j);
+    let dueTxt = '';
+    if (j.basis === 'hour') {
+      const diff = j.currentHours - j.dueHours;
+      dueTxt = diff > 0 ? `Overdue ${diff} hrs` : `Due in ${-diff} hrs`;
+    } else if (j.dueDate) {
+      const diff = Math.round((new Date(j.dueDate) - new Date()) / 86400000);
+      dueTxt = diff < 0 ? `Overdue ${-diff}d` : diff === 0 ? 'Due today' : `In ${diff}d`;
+    }
+    const dueColor = eStatus === 'overdue' ? 'danger' : eStatus === 'inprogress' ? 'info' : 'warning';
+    return `
+      <a href="#" class="op-task-row" data-nav="job" data-job="${j.id}">
+        <div class="op-task-thumb">${thumb}</div>
+        <div class="op-task-body">
+          <div class="op-task-title">${j.equipName}</div>
+          <div class="op-task-meta">${j.type} · ${j.location}</div>
+          <div class="op-task-pills">
+            ${pill(dueTxt, dueColor)}
+            ${eStatus === 'inprogress' ? pill('In progress', 'info') : ''}
+          </div>
+        </div>
+        <svg class="op-task-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="9 18 15 12 9 6"/></svg>
+      </a>
+    `;
+  };
+
+  return `
+    <div class="op-overview">
+      <div class="op-greeting">
+        <div class="op-greeting-hi">${greeting}, <strong>${name}</strong></div>
+        <div class="op-greeting-date">${dateLabel}</div>
+      </div>
+
+      <div class="op-actions op-actions-single">
+        <button class="op-action-btn op-action-bd" data-action="report-breakdown">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+          <span>Report Breakdown</span>
+        </button>
+      </div>
+
+      ${activeBreakdowns.length > 0 ? `
+        <div class="op-section op-section-bd">
+          <div class="op-section-hd">
+            <span class="bd-pulse-dot"></span>
+            <span>Active breakdowns</span>
+            <span class="op-count op-count-bd">${activeBreakdowns.length}</span>
+          </div>
+          <div class="op-list">
+            ${activeBreakdowns.map(b => {
+              const eq = EQUIPMENT.find(x => x.id === b.equipId);
+              const photo = eq && eq.photos && (eq.photos.front || eq.photos.rear || eq.photos.left || eq.photos.right);
+              const thumb = photo
+                ? `<img src="${photo}" alt="${b.equipName}">`
+                : equipIcon(eq && eq.type);
+              return `
+                <a href="#" class="op-task-row op-task-row-bd" data-nav="equipment-detail" data-equip="${b.equipId}">
+                  <div class="op-task-thumb">${thumb}</div>
+                  <div class="op-task-body">
+                    <div class="op-task-title">${b.equipName}</div>
+                    <div class="op-task-meta">${b.description.slice(0, 60)}${b.description.length > 60 ? '…' : ''}</div>
+                    <div class="op-task-pills">${bdSeverityPill(b.severity)} ${pill(`By ${b.reportedBy} · ${fmtDate(b.date)}`, 'neutral')}</div>
+                  </div>
+                  <svg class="op-task-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="9 18 15 12 9 6"/></svg>
+                </a>
+              `;
+            }).join('')}
+          </div>
+        </div>
+      ` : ''}
+
+      ${inprogJobs.length > 0 ? `
+        <div class="op-section">
+          <div class="op-section-hd">
+            <span>Jobs in progress</span>
+            <span class="op-count">${inprogJobs.length}</span>
+          </div>
+          <div class="op-list">${inprogJobs.map(renderJobRow).join('')}</div>
+        </div>
+      ` : ''}
+
+      ${overdueJobs.length > 0 ? `
+        <div class="op-section">
+          <div class="op-section-hd">
+            <span>Overdue work</span>
+            <span class="op-count op-count-bd">${overdueJobs.length}</span>
+          </div>
+          <div class="op-list">${overdueJobs.map(renderJobRow).join('')}</div>
+        </div>
+      ` : ''}
+
+      ${todayJobs.length > 0 ? `
+        <div class="op-section">
+          <div class="op-section-hd">
+            <span>Due today</span>
+            <span class="op-count">${todayJobs.length}</span>
+          </div>
+          <div class="op-list">${todayJobs.map(renderJobRow).join('')}</div>
+        </div>
+      ` : ''}
+
+      ${weekJobs.length > 0 ? `
+        <div class="op-section">
+          <div class="op-section-hd">
+            <span>This week</span>
+            <span class="op-count">${weekJobs.length}</span>
+          </div>
+          <div class="op-list">${weekJobs.slice(0, 5).map(renderJobRow).join('')}</div>
+          ${weekJobs.length > 5 ? `<a href="#" data-nav="maintenance" class="op-view-all">View all ${weekJobs.length} upcoming jobs →</a>` : ''}
+        </div>
+      ` : ''}
+
+      ${(activeBreakdowns.length + inprogJobs.length + overdueJobs.length + todayJobs.length + weekJobs.length) === 0 ? `
+        <div class="op-allclear">
+          <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" style="width:48px;height:48px;opacity:0.5;"><polyline points="20 6 9 17 4 12"/></svg>
+          <div class="op-allclear-title">All caught up</div>
+          <div class="op-allclear-sub">No overdue jobs, no breakdowns, no work scheduled this week.</div>
+        </div>
+      ` : ''}
+
+      ${closedToday > 0 ? `
+        <div class="op-footer-stat">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" style="width:16px;height:16px;color:var(--ok-text);"><polyline points="20 6 9 17 4 12"/></svg>
+          <span>You closed <strong>${closedToday}</strong> job${closedToday > 1 ? 's' : ''} today. Nice work.</span>
+        </div>
+      ` : ''}
+    </div>
+  `;
+}
+
+/* ═══════════════════════════════════════════════════════════
+   ADMIN OVERVIEW — analytics dashboard (original)
+   ═══════════════════════════════════════════════════════════ */
+
+function renderAdminOverview() {
   const breakdown = EQUIPMENT.filter(e => effectiveEquipmentStatus(e) === 'breakdown').length;
   const overdue   = EQUIPMENT.filter(e => effectiveEquipmentStatus(e) === 'overdue').length;
   const warning   = EQUIPMENT.filter(e => effectiveEquipmentStatus(e) === 'warning').length;
@@ -164,7 +338,7 @@ function renderOverview() {
           <div class="kpi-value">${dueWeek}</div>
           <div class="kpi-sub">upcoming jobs</div>
         </div>
-        <div class="kpi-card ${partsToReorder > 0 ? 'kpi-warning' : 'kpi-info'} card-click" data-nav="parts">
+        <div class="kpi-card ${partsToReorder > 0 ? 'kpi-warning' : 'kpi-info'} card-click admin-only" data-nav="parts">
           <div class="kpi-label">Parts to reorder</div>
           <div class="kpi-value">${partsToReorder}</div>
           <div class="kpi-sub">${partsToReorder===0 ? 'stock levels healthy' : `${partsOut} out · ${partsLow} low stock`}</div>
@@ -316,7 +490,7 @@ function renderOverview() {
             })()}
           </div>
 
-          <div class="card">
+          <div class="card admin-only">
             <div class="section-hd-title mb-8">Parts alert</div>
             ${PARTS.filter(p => p.stock <= p.minStock).slice(0,4).map(p => `
               <div style="display:flex;justify-content:space-between;align-items:center;padding:7px 0;border-top:0.5px solid var(--border);">
@@ -352,30 +526,48 @@ function renderJobCard(j) {
     dueText = diff < 0 ? `Overdue ${-diff} day${diff<-1?'s':''}` : diff === 0 ? 'Due today' : `Due in ${diff} day${diff>1?'s':''}`;
   }
 
+  // Resolve thumbnail: equipment photo, facility photo, or placeholder icon.
+  const isFac = j.entityType === 'facility';
+  let thumbHtml = '';
+  if (isFac) {
+    const f = FACILITIES.find(x => x.id === j.entityId);
+    thumbHtml = (f && f.photo)
+      ? `<img src="${f.photo}" alt="${j.equipName}">`
+      : `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 21h18M5 21V7l8-4v18M19 21V11l-6-4"/></svg>`;
+  } else {
+    const eq = EQUIPMENT.find(x => x.id === (j.entityId || j.equipId));
+    const photo = eq && eq.photos && (eq.photos.front || eq.photos.rear || eq.photos.left || eq.photos.right);
+    thumbHtml = photo
+      ? `<img src="${photo}" alt="${j.equipName}">`
+      : equipIcon(eq && eq.type);
+  }
+
   return `
     <div class="job-card ${color}" data-nav="job" data-job="${j.id}">
-      <div class="job-card-hd">
-        <div>
+      <div class="job-card-thumb">${thumbHtml}</div>
+      <div class="job-card-body">
+        <div class="job-card-hd">
           <div class="job-card-title">${j.equipName} · ${j.type}</div>
+          <span style="font-size:11px;color:var(--text-3);flex-shrink:0;">${j.location}</span>
         </div>
-        <span style="font-size:11px;color:var(--text-3);">${j.location}</span>
-      </div>
-      <div class="job-card-meta">${j.equipCode} · ${j.basis === 'hour' ? `${j.currentHours.toLocaleString()} / ${j.dueHours.toLocaleString()} op hrs` : fmtDate(j.dueDate)}</div>
-      ${j.basis === 'hour' ? `
-        <div class="progress mb-8">
-          <div class="progress-fill" style="width:${Math.min(100, Math.round(j.currentHours/j.dueHours*100))}%;background:${color==='danger'?'var(--danger-text)':color==='warning'?'var(--warn-text)':'var(--ok-text)'};"></div>
+        <div class="job-card-meta">${j.equipCode} · ${j.basis === 'hour' ? `${j.currentHours.toLocaleString()} / ${j.dueHours.toLocaleString()} op hrs` : fmtDate(j.dueDate)}</div>
+        ${j.basis === 'hour' ? `
+          <div class="progress mb-8">
+            <div class="progress-fill" style="width:${Math.min(100, Math.round(j.currentHours/j.dueHours*100))}%;background:${color==='danger'?'var(--danger-text)':color==='warning'?'var(--warn-text)':'var(--ok-text)'};"></div>
+          </div>
+        ` : ''}
+        <div class="job-card-pills">
+          ${pill(j.type, 'info')}
+          ${pill(dueText, color)}
+          ${eStatus === 'inprogress' ? pill('In progress','info') : ''}
+          ${j.recurrence && j.recurrence !== 'none' ? pill(`🔄 ${RECURRENCE_LABELS[j.recurrence] || j.recurrence}`, 'neutral') : ''}
+          ${(() => {
+            const ps = jobPartsSummary(j);
+            if (ps.blocked > 0) return pill(`⚠ ${ps.blocked} part${ps.blocked>1?'s':''} missing`, 'danger');
+            if (ps.low > 0)     return pill(`${ps.low} part${ps.low>1?'s':''} low`, 'warning');
+            return '';
+          })()}
         </div>
-      ` : ''}
-      <div class="job-card-pills">
-        ${pill(j.type, 'info')}
-        ${pill(dueText, color)}
-        ${eStatus === 'inprogress' ? pill('In progress','info') : ''}
-        ${(() => {
-          const ps = jobPartsSummary(j);
-          if (ps.blocked > 0) return pill(`⚠ ${ps.blocked} part${ps.blocked>1?'s':''} missing`, 'danger');
-          if (ps.low > 0)     return pill(`${ps.low} part${ps.low>1?'s':''} low`, 'warning');
-          return '';
-        })()}
       </div>
     </div>
   `;
@@ -449,7 +641,7 @@ function renderEquipmentList() {
           </button>` : '',
         }) : `
         <div class="empty-state">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+          <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" style="width:36px;height:36px;opacity:0.4;flex-shrink:0;"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
           <div class="empty-state-title">No equipment matches</div>
           <div class="empty-state-sub">Try adjusting your search or filters.</div>
         </div>
@@ -472,55 +664,55 @@ function renderEquipCard(e) {
 
   const borderStyle = isBd ? 'border-color:var(--bd-border);border-left:3px solid var(--bd-text);' : '';
 
+  const heroPhoto = e.photos && (e.photos.front || e.photos.rear || e.photos.left || e.photos.right);
+
   return `
     <div class="equip-card" style="${borderStyle}" data-nav="equipment-detail" data-equip="${e.id}">
-      <div class="equip-card-hd">
-        <div style="display:flex;align-items:center;gap:10px;">
-          <div class="equip-card-icon ${e.photos && e.photos.front ? 'equip-card-icon-img' : ''}" style="${isBd?'background:var(--bd-bg);color:var(--bd-text);':''}">${e.photos && e.photos.front ? `<img src="${e.photos.front}" alt="${e.name}">` : equipIcon(e.type)}</div>
-          <div>
-            <div class="equip-name">${e.name}</div>
-            <div class="equip-meta"><span class="code">${e.code}</span> · ${e.location}</div>
-          </div>
-        </div>
-        <div style="display:flex;align-items:center;gap:6px;">
+      <div class="equip-hero ${isBd ? 'hero-bd' : ''}">
+        ${heroPhoto
+          ? `<img src="${heroPhoto}" alt="${e.name}">`
+          : `<div class="equip-hero-placeholder">${equipIcon(e.type)}</div>`}
+        <div class="equip-hero-status">
           ${isBd ? '<span class="bd-pulse-dot"></span>' : ''}
           ${pill(label, color)}
         </div>
       </div>
-      <div class="equip-card-body">
-        <div class="equip-stat-row"><span class="equip-stat-label">Make & model</span><span class="equip-stat-val">${e.make} ${e.model}</span></div>
-        <div class="equip-stat-row"><span class="equip-stat-label">Fuel type</span><span class="equip-stat-val">${e.fuel}</span></div>
-        <div class="equip-stat-row"><span class="equip-stat-label">Operating hrs</span><span class="equip-stat-val">${e.hours.toLocaleString()} hrs</span></div>
-
-        ${isBd && activeBd ? `
-          <div style="margin-top:8px;padding-top:8px;border-top:0.5px solid var(--bd-border);background:var(--bd-bg);border-radius:var(--r-sm);padding:8px;margin-top:8px;">
-            <div style="font-size:11px;font-weight:600;color:var(--bd-text);margin-bottom:3px;">Active breakdown · reported ${activeBd.time} by ${activeBd.reportedBy}</div>
-            <div style="font-size:11px;color:var(--bd-text);opacity:0.85;line-height:1.4;">${activeBd.description.slice(0,80)}${activeBd.description.length>80?'…':''}</div>
-          </div>
-        ` : job ? `
-          <div style="margin-top:8px;padding-top:8px;border-top:0.5px solid var(--border);">
-            <div style="font-size:11px;color:var(--text-3);margin-bottom:4px;">Next service</div>
-            <div style="display:flex;align-items:center;gap:6px;">
-              ${pill(job.type, 'info')}
-              ${job.basis === 'hour'
-                ? pill(`${job.currentHours.toLocaleString()} / ${job.dueHours.toLocaleString()} hrs`, color)
-                : pill(fmtDate(job.dueDate), color)}
-            </div>
-          </div>
-        ` : `
-          <div style="margin-top:8px;padding-top:8px;border-top:0.5px solid var(--border);">
-            <div style="font-size:11px;color:var(--ok-text);">No upcoming jobs scheduled</div>
-          </div>
-        `}
-
-        <div style="margin-top:10px;padding-top:8px;border-top:0.5px solid var(--border);display:flex;justify-content:flex-end;">
-          <button class="btn btn-sm bd-report-btn" style="color:var(--bd-text);border-color:var(--bd-border);background:var(--bd-bg);"
-            data-action="report-breakdown" data-equip="${e.id}"
-            onclick="event.stopPropagation()">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" style="width:11px;height:11px"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
-            Report breakdown
-          </button>
+      <div class="equip-card-content">
+        <div>
+          <div class="equip-name">${e.name}</div>
+          <div class="equip-meta"><span class="code">${e.code}</span> · ${e.location}</div>
         </div>
+        <div class="equip-card-body">
+          <div class="equip-stat-row"><span class="equip-stat-label">Make & model</span><span class="equip-stat-val">${e.make} ${e.model}</span></div>
+          <div class="equip-stat-row"><span class="equip-stat-label">Operating hrs</span><span class="equip-stat-val">${e.hours.toLocaleString()} hrs</span></div>
+
+          ${isBd && activeBd ? `
+            <div style="margin-top:8px;background:var(--bd-bg);border-radius:var(--r-sm);padding:8px;">
+              <div style="font-size:11px;font-weight:600;color:var(--bd-text);margin-bottom:3px;">Active breakdown · ${activeBd.time} by ${activeBd.reportedBy}</div>
+              <div style="font-size:11px;color:var(--bd-text);opacity:0.85;line-height:1.4;">${activeBd.description.slice(0,70)}${activeBd.description.length>70?'…':''}</div>
+            </div>
+          ` : job ? `
+            <div style="margin-top:8px;padding-top:6px;border-top:0.5px solid var(--border);">
+              <div style="font-size:11px;color:var(--text-3);margin-bottom:4px;">Next service</div>
+              <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
+                ${pill(job.type, 'info')}
+                ${job.basis === 'hour'
+                  ? pill(`${job.currentHours.toLocaleString()} / ${job.dueHours.toLocaleString()} hrs`, color)
+                  : pill(fmtDate(job.dueDate), color)}
+              </div>
+            </div>
+          ` : `
+            <div style="margin-top:8px;padding-top:6px;border-top:0.5px solid var(--border);font-size:11px;color:var(--ok-text);">
+              No upcoming jobs scheduled
+            </div>
+          `}
+        </div>
+        <button class="btn btn-sm bd-report-btn" style="color:var(--bd-text);border-color:var(--bd-border);background:var(--bd-bg);align-self:flex-end;"
+          data-action="report-breakdown" data-equip="${e.id}"
+          onclick="event.stopPropagation()">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" style="width:11px;height:11px"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+          Report breakdown
+        </button>
       </div>
     </div>
   `;
@@ -616,7 +808,7 @@ function renderEquipmentDetail() {
             </div>
           </div>
 
-          <div class="card mb-12">
+          <div class="card mb-12 admin-only">
             <div class="section-hd mb-12">
               <div class="section-hd-title">Fuel consumption · ${e.fuel.toLowerCase()} · last 6 months</div>
               <div style="display:flex;align-items:center;gap:8px;">
@@ -666,16 +858,13 @@ function renderEquipmentDetail() {
           <div class="card mb-12">
             <div class="section-hd mb-8">
               <div class="section-hd-title">Parts used · this equipment</div>
-              <div style="display:flex;align-items:center;gap:8px;">
-                <a href="#" data-nav="parts" style="font-size:11px;color:var(--accent);text-decoration:none;">View inventory →</a>
-                <button class="btn btn-sm admin-only" data-action="add-equip-part" data-equip="${e.id}">+ Add part</button>
-              </div>
+              <button class="btn btn-sm admin-only" data-action="add-equip-part" data-equip="${e.id}">+ Add part</button>
             </div>
-            ${equip_parts.length === 0 ? `<div style="font-size:12px;color:var(--text-3);">No parts on record. Click "+ Add part" to register parts used by this equipment.</div>` : `
+            ${equip_parts.length === 0 ? `<div style="font-size:12px;color:var(--text-3);">${S.role === 'admin' ? 'No parts on record. Click "+ Add part" to register parts used by this equipment.' : 'No parts on record — ask an administrator to register parts for this equipment.'}</div>` : `
               <div class="table-wrap" style="border-radius:var(--r-md);">
                 <table>
                   <thead>
-                    <tr><th>Part name</th><th>Code</th><th>Qty / job</th><th>Stock</th><th class="admin-only"></th></tr>
+                    <tr><th>Part name</th><th>Part number</th><th>Qty / job</th><th>Stock</th><th class="admin-only"></th></tr>
                   </thead>
                   <tbody>
                     ${equip_parts.map(ep => {
@@ -781,18 +970,18 @@ function renderEquipmentDetail() {
             `}
           </div>
 
-          <div class="card">
+          <div class="card admin-only">
             <div class="section-hd-title mb-8">Maintenance history</div>
             ${equip_hist.length === 0 ? `<div style="font-size:12px;color:var(--text-3);">No history on record.</div>` :
               equip_hist.slice(0,5).map((h,i) => `
-                <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;${i>0?'border-top:0.5px solid var(--border)':''}">
-                  <div>
-                    <div style="font-size:12px;font-weight:500;">${h.type}</div>
-                    <div style="font-size:11px;color:var(--text-3);">${fmtDate(h.date)} · ${h.duration}</div>
+                <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;padding:8px 0;${i>0?'border-top:0.5px solid var(--border)':''}">
+                  <div style="min-width:0;flex:1;">
+                    <div style="font-size:12px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${h.type}</div>
+                    <div style="font-size:11px;color:var(--text-3);">${fmtDate(h.date)} · ${h.duration || '—'}</div>
                   </div>
-                  <div style="text-align:right;">
-                    <div style="font-size:12px;font-weight:500;">${fmtRM(h.cost)}</div>
-                    <div style="font-size:11px;color:var(--text-3);">${h.tech}</div>
+                  <div style="text-align:right;flex-shrink:0;">
+                    <div style="font-size:12px;font-weight:500;">${fmtRM(h.cost||0)}</div>
+                    <div style="font-size:11px;color:var(--text-3);">${h.tech || '—'}</div>
                   </div>
                 </div>
               `).join('')
@@ -800,7 +989,7 @@ function renderEquipmentDetail() {
             ${equip_hist.length > 5 ? `<a href="#" data-nav="history" style="display:block;font-size:11px;color:var(--accent);text-decoration:none;margin-top:8px;">View all ${equip_hist.length} records →</a>` : ''}
           </div>
 
-          <div class="card" style="${equip_bds.length>0?'border-color:var(--bd-border);':''}">
+          <div class="card admin-only" style="${equip_bds.length>0?'border-color:var(--bd-border);':''}">
             <div class="section-hd mb-8">
               <div class="section-hd-title" style="${equip_bds.filter(b=>b.status==='active').length>0?'color:var(--bd-text);':''}">
                 Breakdown history
@@ -937,7 +1126,7 @@ function renderMaintenance() {
 
         ${filtered.length === 0 ? `
           <div class="empty-state">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><polyline points="20 6 9 17 4 12"/></svg>
+            <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" style="width:36px;height:36px;opacity:0.4;flex-shrink:0;"><polyline points="20 6 9 17 4 12"/></svg>
             <div class="empty-state-title">All clear</div>
             <div class="empty-state-sub">No jobs in this category</div>
           </div>
@@ -967,6 +1156,7 @@ function renderJob() {
   const allDone = items.length > 0 && done === items.length;
 
   const pstat = isFac ? { parts: [], blocked: 0, low: 0, total: 0 } : jobPartsSummary(j);
+  const isStarted = j.status === 'inprogress';
 
   return `
     <div>
@@ -983,7 +1173,21 @@ function renderJob() {
           </div>
           <div class="page-sub">${j.location} · started ${j.started ? fmtDate(j.started) : 'not started'}</div>
         </div>
-        <div class="page-hd-right" style="display:flex;gap:6px;">
+        <div class="page-hd-right" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
+          ${j.status === 'inprogress' ? `
+            <div style="display:flex;align-items:center;gap:6px;padding:6px 10px;background:var(--info-bg);color:var(--info-text);border-radius:var(--r-md);font-size:12px;font-weight:600;">
+              <span style="width:7px;height:7px;border-radius:50%;background:var(--info-text);"></span>
+              In progress${j.started ? ` · started ${fmtDate(j.started)}` : ''}
+            </div>
+            <button class="btn btn-sm" data-action="revert-job" data-job="${j.id}" title="Revert to upcoming" style="font-size:11px;color:var(--text-3);">
+              Revert
+            </button>
+          ` : `
+            <button class="btn" data-action="start-job" data-job="${j.id}" style="background:var(--info-bg);color:var(--info-text);border-color:var(--info-text);font-weight:600;">
+              <svg viewBox="0 0 24 24" fill="currentColor" style="width:11px;height:11px"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+              Start job
+            </button>
+          `}
           <button class="btn admin-only" data-action="edit-job" data-job="${j.id}">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 013 3L7 19l-4 1 1-4 12.5-12.5z"/></svg>
             Edit
@@ -1013,15 +1217,29 @@ function renderJob() {
         </div>
       ` : ''}
 
-      <div class="card mb-12" style="${allDone ? 'background:var(--ok-bg);border-color:var(--ok-border)' : ''}">
+      ${!isStarted && items.length > 0 ? `
+        <div class="alert-banner alert-info mb-12" style="display:flex;align-items:center;gap:10px;padding:12px 14px;">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" style="width:18px;height:18px;flex-shrink:0;"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+          <div style="flex:1;">
+            <div style="font-weight:600;font-size:13px;margin-bottom:2px;">Job not started yet</div>
+            <div style="font-size:12px;opacity:0.9;">Press <strong>Start job</strong> above to begin — the checklist and completion step unlock once work begins.</div>
+          </div>
+          <button class="btn" data-action="start-job" data-job="${j.id}" style="background:var(--info-text);border-color:var(--info-text);color:white;font-weight:600;white-space:nowrap;flex-shrink:0;">
+            <svg viewBox="0 0 24 24" fill="currentColor" style="width:11px;height:11px"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+            Start job
+          </button>
+        </div>
+      ` : ''}
+
+      <div class="card mb-12" style="${allDone && isStarted ? 'background:var(--ok-bg);border-color:var(--ok-border)' : ''}">
         <div class="flex-between mb-8">
-          <span style="font-size:12px;font-weight:500;color:${allDone?'var(--ok-text)':'var(--text-2)'}">
-            ${allDone ? '✓ All checks complete · Semua pemeriksaan selesai' : 'Progress'}
+          <span style="font-size:12px;font-weight:500;color:${allDone && isStarted ?'var(--ok-text)':'var(--text-2)'}">
+            ${allDone && isStarted ? '✓ All checks complete · Semua pemeriksaan selesai' : 'Progress'}
           </span>
           <span style="font-size:13px;font-weight:600;">${done} / ${items.length} · ${pct}%</span>
         </div>
         <div class="progress">
-          <div class="progress-fill" style="width:${pct}%;background:${allDone?'var(--ok-text)':'var(--accent)'};transition:width 0.5s;"></div>
+          <div class="progress-fill" style="width:${pct}%;background:${allDone && isStarted ?'var(--ok-text)':'var(--accent)'};transition:width 0.5s;"></div>
         </div>
       </div>
 
@@ -1035,12 +1253,14 @@ function renderJob() {
             ${items.length === 0 ? `
               <div class="alert-banner alert-warning" style="font-size:12px;">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg>
-                <div>No checklist template attached to this job. Technician will need to use a custom checklist, or <a href="#" data-nav="maintenance" style="color:inherit;font-weight:600;">re-schedule with a template →</a></div>
+                <div>No checklist template attached to this job.${S.role === 'admin' ? ` Technician will need to use a custom checklist, or <a href="#" data-nav="maintenance" style="color:inherit;font-weight:600;">re-schedule with a template →</a>` : ' Please proceed using a manual inspection — notify an administrator if a checklist template is needed.'}</div>
               </div>
             ` : items.map(i => `
-              <div class="cl-item ${S.checks[i.id] ? 'done' : ''}" data-check="${i.id}">
-                <div class="cl-check ${S.checks[i.id] ? 'checked' : ''}">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="3" stroke-linecap="round"><polyline points="20 6 9 17 4 12"/></svg>
+              <div class="cl-item ${S.checks[i.id] && isStarted ? 'done' : ''} ${!isStarted ? 'cl-item-locked' : ''}" ${isStarted ? `data-check="${i.id}"` : ''} ${!isStarted ? 'title="Press Start job first to enable the checklist"' : ''}>
+                <div class="cl-check ${S.checks[i.id] && isStarted ? 'checked' : ''}">
+                  ${!isStarted
+                    ? `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" style="width:11px;height:11px;opacity:0.4;"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>`
+                    : `<svg viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="3" stroke-linecap="round"><polyline points="20 6 9 17 4 12"/></svg>`}
                 </div>
                 <div class="cl-text">
                   <div class="cl-bm">${i.bm}</div>
@@ -1099,11 +1319,12 @@ function renderJob() {
               <div class="flex-between"><span class="text-3">Service type</span><span>${j.type}</span></div>
               <div class="flex-between"><span class="text-3">Trigger basis</span><span>${j.basis === 'hour' ? 'Hour-based' : 'Time-based'}</span></div>
               <div class="flex-between"><span class="text-3">Due</span><span>${j.basis==='hour' ? (j.dueHours||0).toLocaleString()+' hrs' : fmtDate(j.dueDate)}</span></div>
+              <div class="flex-between"><span class="text-3">Recurrence</span><span>${RECURRENCE_LABELS[j.recurrence || 'none']}</span></div>
               <div class="flex-between"><span class="text-3">Est. cost</span><span style="font-weight:500;">${fmtRM(j.estCost)}</span></div>
             </div>
           </div>
 
-          ${allDone ? (pstat.blocked > 0 ? `
+          ${allDone && isStarted ? (pstat.blocked > 0 ? `
             <div class="card" style="background:var(--danger-bg);border-color:var(--danger-border);">
               <div class="flex-between">
                 <div>
@@ -1260,6 +1481,15 @@ function renderSchedule() {
                 <select class="input" data-sched-field="checklistId">
                   ${checklistOptions.map(c => `<option value="${c.id}" ${c.id===sf.checklistId?'selected':''}>${c.label}</option>`).join('')}
                 </select>
+              </div>
+              <div class="field ${sf.basis === 'hour' ? '' : 'span-2'}">
+                <label class="field-label">Recurrence</label>
+                <select class="input" data-sched-field="recurrence" ${sf.basis === 'hour' ? 'disabled' : ''}>
+                  ${Object.entries(RECURRENCE_LABELS).map(([v, lbl]) => `<option value="${v}" ${(sf.recurrence||'none')===v?'selected':''}>${lbl}</option>`).join('')}
+                </select>
+                <div class="field-hint">${sf.basis === 'hour'
+                  ? 'Recurring schedules are only supported for time-based jobs.'
+                  : 'When this job is closed, the next one will auto-schedule for the chosen interval.'}</div>
               </div>
             </div>
           </div>
@@ -1420,7 +1650,7 @@ function renderHistory() {
           <div class="page-sub">All maintenance, breakdown, and fuel records · ${periodLabel}</div>
         </div>
         <div class="page-hd-right">
-          <button class="btn" data-action="export-history-csv">
+          <button class="btn admin-only" data-action="export-history-csv">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" style="width:13px;height:13px"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>
             Export CSV
           </button>
@@ -1478,14 +1708,14 @@ function renderHistMaintenance(list) {
 
   if (list.length === 0) {
     return `<div class="empty-state">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+      <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" style="width:36px;height:36px;opacity:0.4;flex-shrink:0;"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
       <div class="empty-state-title">No maintenance records</div>
       <div class="empty-state-sub">Nothing completed in the selected period. Try widening the date range or clearing filters.</div>
     </div>`;
   }
 
   return `
-    <div class="grid-4 mb-16">
+    <div class="grid-4 mb-16 admin-only">
       <div class="kpi-card kpi-default"><div class="kpi-label">Jobs completed</div><div class="kpi-value">${list.length}</div><div class="kpi-sub">${eqCount} equip · ${facCount} facility</div></div>
       <div class="kpi-card kpi-info"><div class="kpi-label">Total spend</div><div class="kpi-value" style="font-size:20px;">${fmtRM(totalCost)}</div><div class="kpi-sub">P ${fmtRM(totalParts)} · L ${fmtRM(totalLabor)}</div></div>
       <div class="kpi-card kpi-default"><div class="kpi-label">Avg cost / job</div><div class="kpi-value" style="font-size:20px;">${fmtRM(avgCost)}</div><div class="kpi-sub">per completion</div></div>
@@ -1504,9 +1734,9 @@ function renderHistMaintenance(list) {
               <tr>
                 <td style="white-space:nowrap;color:var(--text-2);">${fmtDate(h.date)}</td>
                 <td>
-                  <div style="display:flex;align-items:center;gap:6px;">
-                    <span class="pill ${isFac?'pill-info':'pill-neutral'}" style="font-size:9.5px;padding:1px 6px;">${isFac?'Facility':'Equipment'}</span>
-                    <div>
+                  <div style="display:flex;align-items:center;gap:8px;">
+                    <span class="pill ${isFac?'pill-info':'pill-neutral'}" style="font-size:9.5px;padding:2px 0;min-width:68px;justify-content:center;flex-shrink:0;">${isFac?'Facility':'Equipment'}</span>
+                    <div style="min-width:0;">
                       <div style="font-weight:500;">${h.equipName}</div>
                       ${h.equipCode ? `<span class="code">${h.equipCode}</span>` : ''}
                     </div>
@@ -1545,14 +1775,14 @@ function renderHistBreakdowns(list) {
 
   if (list.length === 0) {
     return `<div class="empty-state">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><polyline points="20 6 9 17 4 12"/></svg>
+      <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" style="width:36px;height:36px;opacity:0.4;flex-shrink:0;"><polyline points="20 6 9 17 4 12"/></svg>
       <div class="empty-state-title">No breakdowns recorded</div>
       <div class="empty-state-sub">Nothing was reported in the selected period — fleet kept operational.</div>
     </div>`;
   }
 
   return `
-    <div class="grid-4 mb-16">
+    <div class="grid-4 mb-16 admin-only">
       <div class="kpi-card ${active>0?'kpi-danger':'kpi-default'}"><div class="kpi-label">Total breakdowns</div><div class="kpi-value">${list.length}</div><div class="kpi-sub">${active} active · ${resolved} resolved</div></div>
       <div class="kpi-card kpi-default"><div class="kpi-label">Avg time to resolve</div><div class="kpi-value" style="font-size:22px;">${avgResolveDays == null ? '—' : `${avgResolveDays}d`}</div><div class="kpi-sub">from report to fix</div></div>
       <div class="kpi-card kpi-warning"><div class="kpi-label">Most breakdowns</div><div class="kpi-value" style="font-size:14px;line-height:1.3;">${worst ? worst[0] : '—'}</div><div class="kpi-sub">${worst ? worst[1] + ' report' + (worst[1]>1?'s':'') : 'no data'}</div></div>
@@ -1604,14 +1834,14 @@ function renderHistFuel(list) {
 
   if (list.length === 0) {
     return `<div class="empty-state">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M3 22h12V2H3v20zM15 8h3a2 2 0 012 2v8a2 2 0 01-2 2M9 8V4M9 12h.01"/></svg>
+      <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" style="width:36px;height:36px;opacity:0.4;flex-shrink:0;"><path d="M3 22h12V2H3v20zM15 8h3a2 2 0 012 2v8a2 2 0 01-2 2M9 8V4M9 12h.01"/></svg>
       <div class="empty-state-title">No fuel logged</div>
       <div class="empty-state-sub">No refuel entries in the selected period.</div>
     </div>`;
   }
 
   return `
-    <div class="grid-4 mb-16">
+    <div class="grid-4 mb-16 admin-only">
       <div class="kpi-card kpi-default"><div class="kpi-label">Total litres</div><div class="kpi-value">${Math.round(totalLitres).toLocaleString()}</div><div class="kpi-sub">${list.length} refuel${list.length>1?'s':''}</div></div>
       <div class="kpi-card kpi-info"><div class="kpi-label">Total fuel cost</div><div class="kpi-value" style="font-size:20px;">${fmtRM(Math.round(totalCost))}</div><div class="kpi-sub">avg RM ${avgPrice.toFixed(2)}/L</div></div>
       <div class="kpi-card kpi-warning"><div class="kpi-label">Top consumer</div><div class="kpi-value" style="font-size:14px;line-height:1.3;">${top ? top[0] : '—'}</div><div class="kpi-sub">${top ? Math.round(top[1].litres) + ' L · ' + fmtRM(Math.round(top[1].cost)) : 'no data'}</div></div>
@@ -1666,6 +1896,16 @@ function renderParts() {
     if (S.partsFilter === 'out')  list = list.filter(p => p.stock === 0);
     else if (categories.includes(S.partsFilter)) list = list.filter(p => p.cat === S.partsFilter);
   }
+  // Equipment filter — show only parts linked to a specific equipment
+  if (S.partsEquipFilter && S.partsEquipFilter !== 'all') {
+    const eq = EQUIPMENT.find(e => e.id === S.partsEquipFilter);
+    if (eq && Array.isArray(eq.parts)) {
+      const linkedPartIds = new Set(eq.parts.map(ep => ep.partId));
+      list = list.filter(p => linkedPartIds.has(p.id));
+    } else {
+      list = [];
+    }
+  }
 
   const outCount  = PARTS.filter(p => p.stock === 0).length;
   const lowCount  = PARTS.filter(p => p.stock > 0 && p.stock <= p.minStock).length;
@@ -1690,7 +1930,9 @@ function renderParts() {
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg>
           <div>
             <strong>${outCount} part${outCount!==1?'s':''} out of stock</strong> and <strong>${lowCount} below minimum stock level.</strong>
-            Operator cannot order without part numbers. <a href="#" style="color:inherit;font-weight:600;">Order now →</a>
+            ${S.role === 'admin'
+              ? 'Use the <strong>Order</strong> button on each row to reorder from the supplier.'
+              : 'Please inform an administrator to reorder from the supplier.'}
           </div>
         </div>
       ` : ''}
@@ -1706,6 +1948,10 @@ function renderParts() {
           <option value="low" ${S.partsFilter==='low'?'selected':''}>Low stock</option>
           ${categories.map(c => `<option value="${c}" ${S.partsFilter===c?'selected':''}>${c}</option>`).join('')}
         </select>
+        <select class="filter-select" id="parts-equip-filter" title="Show parts linked to a specific equipment">
+          <option value="all" ${(!S.partsEquipFilter || S.partsEquipFilter==='all')?'selected':''}>All equipment</option>
+          ${EQUIPMENT.map(e => `<option value="${e.id}" ${S.partsEquipFilter===e.id?'selected':''}>${e.code} · ${e.name}</option>`).join('')}
+        </select>
       </div>
 
       ${list.length === 0 ? (PARTS.length === 0 ? renderEmptyZero({
@@ -1718,16 +1964,16 @@ function renderParts() {
           </button>` : '',
         }) : `
         <div class="empty-state">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+          <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" style="width:36px;height:36px;opacity:0.4;"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
           <div class="empty-state-title">No parts match</div>
-          <div class="empty-state-sub">Adjust your search or filters.</div>
+          <div class="empty-state-sub">Adjust your search or filters — or pick a different equipment.</div>
         </div>`) : `
       <div class="table-wrap">
         <table>
           <thead>
             <tr>
               <th>Part name</th>
-              <th>Code</th>
+              <th>Part number</th>
               <th>Category</th>
               <th>Unit price</th>
               <th>Stock</th>
@@ -1749,11 +1995,17 @@ function renderParts() {
                   <td>RM ${p.price}</td>
                   <td style="text-align:center;">${p.stock} ${p.unit}</td>
                   <td style="text-align:center;color:var(--text-3);">${p.minStock} ${p.unit}</td>
-                  <td style="text-align:center;" title="${users.map(u=>u.name).join(', ')}">${
-                    users.length === 0
+                  <td title="${users.map(u=>u.name).join(', ')}">
+                    ${users.length === 0
                       ? `<span style="color:var(--text-4);font-style:italic;">Unused</span>`
-                      : `${users.length} equip.`
-                  }</td>
+                      : (() => {
+                          const chip = u => `<a class="equip-chip" href="#" data-nav="equipment-detail" data-equip="${u.id}" title="${u.name}" style="display:inline-block;padding:2px 6px;border:0.5px solid var(--border-2);border-radius:4px;background:var(--neutral-bg);font-size:10.5px;font-family:var(--font-mono);color:var(--text-2);text-decoration:none;margin:1px 2px 1px 0;">${u.code}</a>`;
+                          if (users.length <= 2) return users.map(chip).join('');
+                          return users.slice(0,2).map(chip).join('') +
+                            `<a href="#" data-action="view-part-compat" data-part="${p.id}" style="font-size:10.5px;color:var(--accent);text-decoration:none;margin-left:2px;">+${users.length - 2} more</a>`;
+                        })()
+                    }
+                  </td>
                   <td>${pill(stockStatus[0], stockStatus[1])}</td>
                   <td class="admin-only">
                     <div style="display:flex;gap:6px;align-items:center;justify-content:flex-end;">
@@ -1847,7 +2099,7 @@ function renderFacilities() {
           </button>` : '',
         }) : `
         <div class="empty-state">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M3 21h18M5 21V7l8-4v18M19 21V11l-6-4"/></svg>
+          <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" style="width:36px;height:36px;opacity:0.4;flex-shrink:0;"><path d="M3 21h18M5 21V7l8-4v18M19 21V11l-6-4"/></svg>
           <div class="empty-state-title">No facilities match</div>
           <div class="empty-state-sub">Adjust filters or add a new facility.</div>
         </div>
@@ -1860,32 +2112,36 @@ function renderFacilities() {
             const lastHist = history.sort((a,b) => a.date < b.date ? 1 : -1)[0];
             return `
               <div class="equip-card" data-nav="facility-detail" data-facility="${f.id}">
-                <div class="equip-card-hd">
-                  <div style="display:flex;align-items:center;gap:10px;">
-                    <div class="equip-card-icon ${f.photo ? 'equip-card-icon-img' : ''}">
-                      ${f.photo
-                        ? `<img src="${f.photo}" alt="${f.name}">`
-                        : `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 21h18M5 21V7l8-4v18M19 21V11l-6-4"/></svg>`}
-                    </div>
-                    <div>
-                      <div class="equip-name">${f.name}</div>
-                      <div class="equip-meta">${f.type} · ${f.location}</div>
-                    </div>
+                <div class="equip-hero">
+                  ${f.photo
+                    ? `<img src="${f.photo}" alt="${f.name}">`
+                    : `<div class="equip-hero-placeholder"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 21h18M5 21V7l8-4v18M19 21V11l-6-4"/></svg></div>`}
+                  <div class="equip-hero-status">
+                    ${pill(f.status==='active'?'Active':'Retired', f.status==='active'?'ok':'neutral')}
                   </div>
-                  ${pill(f.status==='active'?'Active':'Retired', f.status==='active'?'ok':'neutral')}
                 </div>
-                <div class="equip-card-body">
-                  <div class="equip-stat-row"><span class="equip-stat-label">Quantity</span><span class="equip-stat-val">${f.quantity} unit${f.quantity>1?'s':''}</span></div>
-                  <div class="equip-stat-row"><span class="equip-stat-label">Installed</span><span class="equip-stat-val">${f.installedDate ? fmtDate(f.installedDate) : '—'}</span></div>
-                  <div class="equip-stat-row"><span class="equip-stat-label">Last checked</span><span class="equip-stat-val">${lastHist ? fmtDate(lastHist.date) : 'Never'}</span></div>
-                  <div style="margin-top:8px;padding-top:8px;border-top:0.5px solid var(--border);">
+                <div class="equip-card-content">
+                  <div>
+                    <div class="equip-name">${f.name}</div>
+                    <div class="equip-meta">${f.type} · ${f.location}</div>
+                  </div>
+                  <div class="equip-card-body">
+                    <div class="equip-stat-row"><span class="equip-stat-label">Quantity</span><span class="equip-stat-val">${f.quantity} unit${f.quantity>1?'s':''}</span></div>
+                    <div class="equip-stat-row"><span class="equip-stat-label">Installed</span><span class="equip-stat-val">${f.installedDate ? fmtDate(f.installedDate) : '—'}</span></div>
+                    <div class="equip-stat-row"><span class="equip-stat-label">Last checked</span><span class="equip-stat-val">${lastHist ? fmtDate(lastHist.date) : 'Never'}</span></div>
                     ${nextJob ? `
-                      <div style="font-size:11px;color:var(--text-3);margin-bottom:4px;">Next check</div>
-                      <div style="display:flex;align-items:center;gap:6px;">
-                        ${pill(nextJob.type, 'info')}
-                        ${pill(nextJob.dueDate ? fmtDate(nextJob.dueDate) : 'TBD', statusColor(nextJob.status))}
+                      <div style="margin-top:8px;padding-top:6px;border-top:0.5px solid var(--border);">
+                        <div style="font-size:11px;color:var(--text-3);margin-bottom:4px;">Next check</div>
+                        <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
+                          ${pill(nextJob.type, 'info')}
+                          ${pill(nextJob.dueDate ? fmtDate(nextJob.dueDate) : 'TBD', statusColor(nextJob.status))}
+                        </div>
                       </div>
-                    ` : `<div style="font-size:11px;color:var(--text-3);">No scheduled check</div>`}
+                    ` : `
+                      <div style="margin-top:8px;padding-top:6px;border-top:0.5px solid var(--border);font-size:11px;color:var(--text-3);">
+                        No scheduled check
+                      </div>
+                    `}
                   </div>
                 </div>
               </div>
@@ -1979,19 +2235,20 @@ function renderFacilityDetail() {
           <div class="card">
             <div class="section-hd-title mb-8">Check history</div>
             ${fac_hist.length === 0 ? `<div style="font-size:12px;color:var(--text-3);">No history on record.</div>` :
-              fac_hist.slice(0,8).map((h,i) => `
-                <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;${i>0?'border-top:0.5px solid var(--border)':''}">
-                  <div>
-                    <div style="font-size:12px;font-weight:500;">${h.type}</div>
+              fac_hist.slice(0,5).map((h,i) => `
+                <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;padding:8px 0;${i>0?'border-top:0.5px solid var(--border)':''}">
+                  <div style="min-width:0;flex:1;">
+                    <div style="font-size:12px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${h.type}</div>
                     <div style="font-size:11px;color:var(--text-3);">${fmtDate(h.date)} · ${h.duration || '—'}</div>
                   </div>
-                  <div style="text-align:right;">
+                  <div style="text-align:right;flex-shrink:0;">
                     <div style="font-size:12px;font-weight:500;">${fmtRM(h.cost||0)}</div>
-                    <div style="font-size:11px;color:var(--text-3);">${h.tech}</div>
+                    <div style="font-size:11px;color:var(--text-3);">${h.tech || '—'}</div>
                   </div>
                 </div>
               `).join('')
             }
+            ${fac_hist.length > 5 ? `<a href="#" data-nav="history" style="display:block;font-size:11px;color:var(--accent);text-decoration:none;margin-top:8px;">View all ${fac_hist.length} records →</a>` : ''}
           </div>
         </div>
 
@@ -2079,7 +2336,7 @@ function renderTemplates() {
           </button>` : '',
         }) : `
         <div class="empty-state">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M9 11H3v10h6V11zM21 3h-6v18h6V3zM15 7H9v4h6V7z"/></svg>
+          <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" style="width:36px;height:36px;opacity:0.4;flex-shrink:0;"><path d="M9 11H3v10h6V11zM21 3h-6v18h6V3zM15 7H9v4h6V7z"/></svg>
           <div class="empty-state-title">No templates match</div>
           <div class="empty-state-sub">Adjust filters or add a new template.</div>
         </div>`) : `
@@ -2210,7 +2467,7 @@ function renderUsers() {
 
       ${list.length === 0 ? `
         <div class="empty-state">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+          <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" style="width:36px;height:36px;opacity:0.4;flex-shrink:0;"><path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
           <div class="empty-state-title">No users match</div>
           <div class="empty-state-sub">Adjust filters or add a new user.</div>
         </div>
