@@ -972,7 +972,7 @@ function openEditPartInCatalog(partId) {
       </div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
         <div class="field">
-          <label class="field-label">Part code / number <span class="req">*</span></label>
+          <label class="field-label">Part number <span class="req">*</span></label>
           <input class="input" id="epc-code" value="${p.code}" autocomplete="off" style="text-transform:uppercase;">
         </div>
         <div class="field">
@@ -1020,7 +1020,7 @@ function openEditPartInCatalog(partId) {
     const minSt = parseInt(document.getElementById('epc-min').value) || 0;
 
     if (!name) { document.getElementById('epc-name').focus(); toast('Part name required', 'error'); return; }
-    if (!code) { document.getElementById('epc-code').focus(); toast('Part code required', 'error'); return; }
+    if (!code) { document.getElementById('epc-code').focus(); toast('Part number required', 'error'); return; }
     if (!cat)  { document.getElementById('epc-cat').focus();  toast('Category required',  'error'); return; }
 
     const btn = document.getElementById('epc-save');
@@ -1037,6 +1037,161 @@ function openEditPartInCatalog(partId) {
       btn.disabled = false; btn.textContent = 'Save changes';
     }
   };
+}
+
+/* openCalDayEvents — list all events for a specific calendar date in a modal.
+   Used when the user clicks "+N more" on a calendar cell that has overflow. */
+function openCalDayEvents(dateStr) {
+  // Scope events to the current page context (main maintenance / equipment detail / facility detail)
+  let events = [];
+  if (S.page === 'equipment-detail') {
+    const id = S.selectedEquipment;
+    const jobs = JOBS.filter(j => j.equipId === id);
+    const hist = HISTORY.filter(h => h.equipId === id);
+    const bds  = BREAKDOWNS.filter(b => b.equipId === id);
+    events = buildMaintEvents(jobs, hist, bds);
+  } else if (S.page === 'facility-detail') {
+    const id = S.selectedFacility;
+    const jobs = JOBS.filter(j => j.entityType === 'facility' && j.entityId === id);
+    const hist = HISTORY.filter(h => h.entityType === 'facility' && h.entityId === id);
+    events = buildMaintEvents(jobs, hist, []);
+  } else {
+    events = buildMaintEvents(JOBS, HISTORY, BREAKDOWNS);
+  }
+  events = events.filter(ev => ev.date === dateStr);
+
+  const dateLabel = fmtDate(dateStr);
+  document.getElementById('modal-box').style.maxWidth = '460px';
+  openModal('');
+  document.getElementById('modal-inner').innerHTML = `
+    <div class="modal-hd">
+      <div>
+        <div class="modal-title">Events on ${dateLabel}</div>
+        <div style="font-size:11px;color:var(--text-3);margin-top:1px;">${events.length} item${events.length===1?'':'s'} scheduled this day</div>
+      </div>
+      <button class="icon-btn" id="cd-close">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      </button>
+    </div>
+    <div class="modal-body" style="max-height:60vh;overflow-y:auto;">
+      ${events.length === 0 ? `
+        <div style="text-align:center;padding:20px 8px;font-size:13px;color:var(--text-3);">No events on this date.</div>
+      ` : `
+        <div style="display:flex;flex-direction:column;gap:6px;">
+          ${events.map(ev => `
+            <a href="#" class="card-click cal-day-event-row"
+               data-nav="${ev.navPage}"
+               ${ev.equipId    ? `data-equip="${ev.equipId}"` : ''}
+               ${ev.facilityId ? `data-facility="${ev.facilityId}"` : ''}
+               ${ev.jobId      ? `data-job="${ev.jobId}"` : ''}
+               style="display:flex;align-items:center;gap:10px;padding:10px 12px;border:0.5px solid var(--border-2);border-radius:var(--r-md);text-decoration:none;color:inherit;background:var(--card-bg);">
+              <span class="cal-event-dot cal-event-${ev.status}" style="width:8px;height:8px;border-radius:50%;flex-shrink:0;background:${ev.status==='overdue'?'var(--danger-text)':ev.status==='upcoming'?'var(--warn-text)':ev.status==='inprogress'?'var(--info-text)':ev.status==='completed'?'var(--ok-text)':'var(--bd-text)'};"></span>
+              <div style="flex:1;min-width:0;">
+                <div style="font-size:13px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${ev.title}</div>
+                <div style="font-size:11px;color:var(--text-3);margin-top:2px;">${ev.tooltip.split('·').slice(1).join('·').trim() || ev.status}</div>
+              </div>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" style="width:14px;height:14px;color:var(--text-3);flex-shrink:0;"><polyline points="9 18 15 12 9 6"/></svg>
+            </a>
+          `).join('')}
+        </div>
+      `}
+    </div>
+    <div class="modal-ft">
+      <div style="flex:1"></div>
+      <button class="btn" id="cd-close-2">Close</button>
+    </div>
+  `;
+  const close = () => { closeModal(); document.getElementById('modal-box').style.maxWidth = ''; };
+  document.getElementById('cd-close').onclick   = close;
+  document.getElementById('cd-close-2').onclick = close;
+
+  // Wire each row to navigate (modal content was injected after render(), so manual binding needed)
+  document.querySelectorAll('#modal-inner .cal-day-event-row').forEach(row => {
+    row.addEventListener('click', e => {
+      e.preventDefault();
+      const page = row.dataset.nav;
+      const job  = row.dataset.job;
+      const eq   = row.dataset.equip;
+      const fac  = row.dataset.facility;
+      if (job) S.selectedJob = job;
+      if (eq)  S.selectedEquipment = eq;
+      if (fac) S.selectedFacility = fac;
+      close();
+      go(page);
+    });
+  });
+}
+
+/* openPartCompat — shows which equipment a part is compatible with, plus the qty used per service. */
+function openPartCompat(partId) {
+  const p = PARTS.find(x => x.id === partId);
+  if (!p) return;
+  const rows = EQUIPMENT
+    .map(e => {
+      const link = (e.parts || []).find(ep => ep.partId === p.id);
+      return link ? { equip: e, qty: link.qty } : null;
+    })
+    .filter(Boolean);
+
+  document.getElementById('modal-box').style.maxWidth = '480px';
+  openModal('');
+  document.getElementById('modal-inner').innerHTML = `
+    <div class="modal-hd">
+      <div>
+        <div class="modal-title">Compatible equipment</div>
+        <div style="font-size:11px;color:var(--text-3);margin-top:1px;">${p.name} · <span class="code">${p.code}</span></div>
+      </div>
+      <button class="icon-btn" id="pc-close">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      </button>
+    </div>
+    <div class="modal-body">
+      ${rows.length === 0 ? `
+        <div style="text-align:center;padding:16px 8px;font-size:13px;color:var(--text-3);">
+          This part isn't linked to any equipment yet.
+        </div>
+      ` : `
+        <div style="font-size:11.5px;color:var(--text-3);margin-bottom:8px;">Used on ${rows.length} equipment · qty is consumed per service.</div>
+        <div style="display:flex;flex-direction:column;">
+          ${rows.map((r,i) => `
+            <a href="#" class="card-click" data-nav="equipment-detail" data-equip="${r.equip.id}" style="display:flex;justify-content:space-between;align-items:center;padding:10px 4px;text-decoration:none;color:inherit;${i>0?'border-top:0.5px solid var(--border)':''}">
+              <div style="display:flex;align-items:center;gap:10px;min-width:0;">
+                <span class="code" style="flex-shrink:0;">${r.equip.code}</span>
+                <div style="min-width:0;">
+                  <div style="font-size:13px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${r.equip.name}</div>
+                  <div style="font-size:11px;color:var(--text-3);">${r.equip.type} · ${r.equip.location}</div>
+                </div>
+              </div>
+              <div style="text-align:right;flex-shrink:0;margin-left:10px;">
+                <div style="font-size:13px;font-weight:600;">× ${r.qty}</div>
+                <div style="font-size:10px;color:var(--text-3);">${p.unit}/service</div>
+              </div>
+            </a>
+          `).join('')}
+        </div>
+      `}
+    </div>
+    <div class="modal-ft">
+      <div style="flex:1"></div>
+      <button class="btn" id="pc-close-2">Close</button>
+    </div>
+  `;
+  const close = () => { closeModal(); document.getElementById('modal-box').style.maxWidth = ''; };
+  document.getElementById('pc-close').onclick   = close;
+  document.getElementById('pc-close-2').onclick = close;
+
+  // Modal content is injected after render() runs, so data-nav bindings don't reach it.
+  // Wire the equipment rows manually: click → navigate to equipment detail.
+  document.querySelectorAll('#modal-inner [data-nav="equipment-detail"]').forEach(row => {
+    row.addEventListener('click', e => {
+      e.preventDefault();
+      const equipId = row.dataset.equip;
+      if (!equipId) return;
+      close();
+      S.selectedEquipment = equipId;
+      go('equipment-detail');
+    });
+  });
 }
 
 function openDeletePartFromCatalog(partId) {
@@ -1120,7 +1275,7 @@ function openAddPartToCatalog(onSaved) {
       </div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
         <div class="field">
-          <label class="field-label">Part code / number <span class="req">*</span></label>
+          <label class="field-label">Part number <span class="req">*</span></label>
           <input class="input" id="apc-code" placeholder="e.g. T-1637" autocomplete="off" style="text-transform:uppercase;">
         </div>
         <div class="field">
@@ -1174,7 +1329,7 @@ function openAddPartToCatalog(onSaved) {
     const minSt = parseInt(document.getElementById('apc-min').value) || 0;
 
     if (!name) { document.getElementById('apc-name').focus(); toast('Part name required', 'error'); return; }
-    if (!code) { document.getElementById('apc-code').focus(); toast('Part code required', 'error'); return; }
+    if (!code) { document.getElementById('apc-code').focus(); toast('Part number required', 'error'); return; }
     if (!cat)  { document.getElementById('apc-cat').focus();  toast('Category required',  'error'); return; }
 
     const btn = document.getElementById('apc-save');
@@ -1322,7 +1477,7 @@ function openEditEquipmentPart(equipId, partId) {
     <div class="modal-body" style="display:flex;flex-direction:column;gap:12px;">
       <div style="background:var(--neutral-bg);border-radius:var(--r-md);padding:10px 12px;font-size:12px;">
         <div class="flex-between"><span class="text-3">Part</span><span style="font-weight:500;">${part.name}</span></div>
-        <div class="flex-between"><span class="text-3">Code</span><span class="code">${part.code}</span></div>
+        <div class="flex-between"><span class="text-3">Part number</span><span class="code">${part.code}</span></div>
         <div class="flex-between"><span class="text-3">Current stock</span><span>${part.stock} ${part.unit}</span></div>
       </div>
       <div class="field">
@@ -1665,7 +1820,7 @@ function openCloseJob(jobId) {
 
       <div class="field">
         <label class="field-label">Technician <span class="req">*</span></label>
-        <input class="input" id="cj-tech" placeholder="Who performed the work?" autocomplete="off">
+        <input class="input" id="cj-tech" placeholder="Who performed the work?" autocomplete="off" value="${S.user ? S.user.name : ''}">
       </div>
 
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
@@ -1806,15 +1961,14 @@ function openCloseJob(jobId) {
     const btn = document.getElementById('cj-confirm');
     btn.disabled = true; btn.textContent = 'Closing…';
     try {
-      await API.closeJob(j.id, {
+      const result = await API.closeJob(j.id, {
         tech, date, duration,
         laborCost: Math.round(labor),
         miscCost:  Math.round(misc),
         meter,
         notes: notes || null,
       });
-      // Server did: history insert + stock deduction + hours update + job delete — all atomic.
-      // Pull fresh data for everything that changed.
+      // Server did: history insert + stock deduction + hours update + job delete (+ next job created if recurring).
       await Promise.all([
         refreshJobs(),
         refreshHistory(),
@@ -1825,6 +1979,11 @@ function openCloseJob(jobId) {
       closeModal();
       document.getElementById('modal-box').style.maxWidth = '';
       toast(`${e.name} · ${j.type} completed · logged to history`);
+      // If the job was recurring, surface the next auto-scheduled job
+      if (result && result.nextJobId) {
+        const recurLabel = (typeof RECURRENCE_LABELS !== 'undefined' && RECURRENCE_LABELS[j.recurrence]) || 'next cycle';
+        setTimeout(() => toast(`🔄 Next ${j.type} auto-scheduled (${recurLabel.toLowerCase()})`, 'info'), 1600);
+      }
       setTimeout(() => go('maintenance'), 300);
     } catch (err) {
       toast(err.message || 'Failed to close job', 'error');
@@ -1898,7 +2057,7 @@ function openReportBreakdown(equipId) {
       </div>
       <div class="field">
         <label class="field-label">Reported by <span class="req">*</span></label>
-        <input class="input" id="bd-reporter" placeholder="Your name" autocomplete="off">
+        <input class="input" id="bd-reporter" placeholder="Your name" autocomplete="off" value="${S.user ? S.user.name : ''}">
       </div>
       <div class="field">
         <label class="field-label">Immediate action taken <span style="font-weight:400;color:var(--text-4)">(optional)</span></label>
@@ -2033,7 +2192,7 @@ function openResolveBreakdown(bdId) {
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
         <div class="field">
           <label class="field-label">Resolved by <span class="req">*</span></label>
-          <input class="input" id="res-by" placeholder="Technician name" autocomplete="off">
+          <input class="input" id="res-by" placeholder="Technician name" autocomplete="off" value="${S.user ? S.user.name : ''}">
         </div>
         <div class="field">
           <label class="field-label">Resolution date</label>
@@ -2290,7 +2449,7 @@ function openLogFuel(equipId) {
       </div>
       <div class="field">
         <label class="field-label">Refuelled by</label>
-        <input class="input" id="lf-by" placeholder="Operator / technician name" autocomplete="off">
+        <input class="input" id="lf-by" placeholder="Operator / technician name" autocomplete="off" value="${S.user ? S.user.name : ''}">
       </div>
       <div class="field">
         <label class="field-label">Notes <span style="font-weight:400;color:var(--text-4)">(optional)</span></label>
@@ -2783,6 +2942,10 @@ function attachHandlers() {
         saveScheduleFromForm();
       } else if (act === 'complete-job') {
         openCloseJob(el.dataset.job || S.selectedJob);
+      } else if (act === 'start-job') {
+        startJob(el.dataset.job || S.selectedJob);
+      } else if (act === 'revert-job') {
+        revertJob(el.dataset.job || S.selectedJob);
       } else if (act === 'edit-job') {
         openEditJob(el.dataset.job || S.selectedJob);
       } else if (act === 'delete-job') {
@@ -2803,6 +2966,10 @@ function attachHandlers() {
         openEditPartInCatalog(el.dataset.part);
       } else if (act === 'delete-part-item') {
         openDeletePartFromCatalog(el.dataset.part);
+      } else if (act === 'view-part-compat') {
+        openPartCompat(el.dataset.part);
+      } else if (act === 'show-cal-day') {
+        openCalDayEvents(el.dataset.date);
       } else if (act === 'view-template') {
         openViewTemplate(el.dataset.template);
       } else if (act === 'add-template') {
@@ -3001,6 +3168,10 @@ function attachHandlers() {
   if (partsFilterEl) {
     partsFilterEl.addEventListener('change', e => { S.partsFilter = e.target.value; render(); });
   }
+  const partsEquipFilterEl = document.getElementById('parts-equip-filter');
+  if (partsEquipFilterEl) {
+    partsEquipFilterEl.addEventListener('change', e => { S.partsEquipFilter = e.target.value; render(); });
+  }
 
   // Templates search & filters
   bindSearchInput('template-search', 'templateSearch');
@@ -3127,6 +3298,7 @@ async function saveScheduleFromForm() {
     estCost:       parseInt(sf.estCost) || 0,
     requiredPartIds: isFac ? [] : [...sf.requiredPartIds],
     notes:         sf.notes,
+    recurrence:    basis === 'time' ? (sf.recurrence || 'none') : 'none',
   };
   // On create only — set initial status/priority/started. On edit, preserve those.
   if (!isEdit) {
@@ -3159,6 +3331,37 @@ async function saveScheduleFromForm() {
    EDIT / DELETE JOB (admin)
    ═══════════════════════════════════════════════════════════ */
 
+/* startJob — mark a job as "in progress" + record today as the started date.
+   Usable by both admin and operator (signals "someone is working on this").
+   Uses dedicated action endpoint so operators don't hit the admin-only updateJob path. */
+async function startJob(jobId) {
+  const j = JOBS.find(x => x.id === jobId);
+  if (!j) return;
+  if (j.status === 'inprogress') { toast('Job is already in progress', 'info'); return; }
+  try {
+    await API.startJob(jobId);
+    await refreshJobs();
+    toast(`Started · ${j.equipName} · ${j.type}`, 'success');
+    render();
+  } catch (err) {
+    toast(err.message || 'Failed to start job', 'error');
+  }
+}
+
+/* revertJob — flip an in-progress job back to upcoming (for accidental clicks). */
+async function revertJob(jobId) {
+  const j = JOBS.find(x => x.id === jobId);
+  if (!j) return;
+  try {
+    await API.revertJob(jobId);
+    await refreshJobs();
+    toast(`Reverted · ${j.equipName} · now upcoming`, 'info');
+    render();
+  } catch (err) {
+    toast(err.message || 'Failed to revert', 'error');
+  }
+}
+
 function openEditJob(jobId) {
   const j = JOBS.find(x => x.id === jobId);
   if (!j) { toast('Job not found', 'error'); return; }
@@ -3181,6 +3384,7 @@ function openEditJob(jobId) {
     checklistId: j.checklistId || '',
     notes:       j.notes || '',
     requiredPartIds: Array.isArray(j.requiredPartIds) ? [...j.requiredPartIds] : [],
+    recurrence:  j.recurrence || 'none',
   };
   go('schedule');
 }
