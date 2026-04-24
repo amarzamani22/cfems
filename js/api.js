@@ -284,6 +284,7 @@ const API = (() => {
       currentHours:data.currentHours != null ? Number(data.currentHours) : null,
       status:      data.status   || 'upcoming',
       priority:    data.priority || 'medium',
+      recurrence:  data.recurrence || 'none',
       location:    data.location,
       started:     data.started  || null,
       checklistId: data.checklistId || null,
@@ -309,7 +310,7 @@ const API = (() => {
       j.equipName  = entity.name;
       j.equipCode  = data.entityType === 'facility' ? entity.type : entity.code;
     }
-    ['type','basis','dueDate','status','priority','location','started','checklistId','notes'].forEach(k => { if (data[k] !== undefined) j[k] = data[k]; });
+    ['type','basis','dueDate','status','priority','recurrence','location','started','checklistId','notes'].forEach(k => { if (data[k] !== undefined) j[k] = data[k]; });
     if (data.dueHours     !== undefined) j.dueHours     = data.dueHours     != null && data.dueHours     !== '' ? Number(data.dueHours)     : null;
     if (data.currentHours !== undefined) j.currentHours = data.currentHours != null && data.currentHours !== '' ? Number(data.currentHours) : null;
     if (data.estCost      !== undefined) j.estCost      = Number(data.estCost) || 0;
@@ -321,6 +322,22 @@ const API = (() => {
     const i = JOBS.findIndex(j => j.id === id);
     if (i < 0) throw new Error('Job not found');
     JOBS.splice(i, 1); persist();
+    return delay({ ok: true });
+  }
+  async function startJob(id) {
+    const j = JOBS.find(x => x.id === id);
+    if (!j) throw new Error('Job not found');
+    j.status  = 'inprogress';
+    j.started = new Date().toISOString().slice(0, 10);
+    persist();
+    return delay({ ok: true });
+  }
+  async function revertJob(id) {
+    const j = JOBS.find(x => x.id === id);
+    if (!j) throw new Error('Job not found');
+    j.status  = 'upcoming';
+    j.started = null;
+    persist();
     return delay({ ok: true });
   }
   async function closeJob(id, data) {
@@ -378,11 +395,33 @@ const API = (() => {
       if (eq) eq.hours = Number(data.meter);
     }
 
-    // 4. Delete the job
+    // 4. If this was a recurring job, auto-schedule the next one.
+    let nextJobId = null;
+    if (j.recurrence && j.recurrence !== 'none' && j.basis === 'time' && j.dueDate) {
+      const addDays = { weekly: 7 }[j.recurrence] || 0;
+      const nextDue = new Date(j.dueDate);
+      if (addDays) {
+        nextDue.setDate(nextDue.getDate() + addDays);
+      } else {
+        const addMonths = { monthly: 1, quarterly: 3, biannual: 6, yearly: 12 }[j.recurrence] || 0;
+        nextDue.setMonth(nextDue.getMonth() + addMonths);
+      }
+      nextJobId = nid('job');
+      JOBS.push({
+        ...j,
+        id: nextJobId,
+        dueDate: nextDue.toISOString().slice(0, 10),
+        status:  'upcoming',
+        started: null,
+        requiredPartIds: [...(j.requiredPartIds || [])],
+      });
+    }
+
+    // 5. Delete the completed job
     JOBS.splice(jIdx, 1);
 
     persist();
-    return delay({ ok: true, historyId: h.id }, 200);
+    return delay({ ok: true, historyId: h.id, nextJobId }, 200);
   }
 
   /* ─── History ─── */
@@ -498,7 +537,7 @@ const API = (() => {
     listEquipment, createEquipment, updateEquipment, deleteEquipment,
     addEquipmentPart, updateEquipmentPart, removeEquipmentPart,
     listTemplates, createTemplate, updateTemplate, deleteTemplate,
-    listJobs, createJob, updateJob, deleteJob, closeJob,
+    listJobs, createJob, updateJob, deleteJob, startJob, revertJob, closeJob,
     listHistory, deleteHistory,
     listBreakdowns, createBreakdown, updateBreakdown, deleteBreakdown, resolveBreakdown,
     listFuelEntries, createFuelEntry, updateFuelEntry, deleteFuelEntry,
