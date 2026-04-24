@@ -426,6 +426,7 @@ const S = {
   historyAssetFilter: 'all',      // 'all' | 'equipment' | 'facility' (maintenance tab only)
   partsSearch: '',
   partsFilter: 'all',
+  partsEquipFilter: 'all',     // filter parts by which equipment they're linked to
   addEquipStep: 1,
   addEquipData: {},
   maintView: 'list',
@@ -466,8 +467,19 @@ function freshScheduleForm() {
     customType: '',
     notes: '',
     requiredPartIds: [],
+    recurrence: 'none',     // 'none' | 'weekly' | 'monthly' | 'quarterly' | 'biannual' | 'yearly'
   };
 }
+
+/* Human-friendly labels for the recurrence values */
+const RECURRENCE_LABELS = {
+  none:      'One-off (no repeat)',
+  weekly:    'Weekly',
+  monthly:   'Monthly',
+  quarterly: 'Every 3 months',
+  biannual:  'Every 6 months',
+  yearly:    'Yearly',
+};
 
 function defaultRequiredPartsFor(equipId, type) {
   if (!equipId) return [];
